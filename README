@@ -1,10 +1,6 @@
 This is a mirror of http://www.vim.org/scripts/script.php?script_id=4237
 
 
-This plugin allows you to:
+Taboo aims to ease the way you set your vim tabline. In addition, it provides fews useful utilities for renaming tabs.
 
-* customize tab labels: you can choose to display the file name, the entire path, tab number, ecc...
-
-* rename tabs 
-
-See the full documentation at https://github.com/gcmt/taboo.vim
+Check the documentation at https://github.com/gcmt/taboo.vim

@@ -1,331 +1,268 @@
 " =============================================================================
 " File: taboo.vim
-" Description: A little plugin for managing tabs in vim
+" Description: A little plugin for managing the vim tabline
 " Mantainer: Giacomo Comitti (https://github.com/gcmt)
 " Url: https://github.com/gcmt/taboo.vim
 " License: MIT
-" Version: 1.4
-" Last Changed: May 12, 2013
 " =============================================================================
 
+" Init
+" =============================================================================
 
-" Init ------------------------------------------ {{{
-
-if exists("g:loaded_taboo") || &cp || v:version < 703
+if exists("g:loaded_taboo") || v:version < 702
     finish
 endif
 let g:loaded_taboo = 1
 
-" }}}
+let s:save_cpo = &cpo
+set cpo&vim
 
-" Initialize internal variables ------------------ {{{
-
-" the special character used to recognize a special flags in the format string
-let s:fmt_char = get(s:, "fmt_char", "%")
-
-" dictionary of the form: {tab_number: label, ..}. This is populated when Vim
-" exits. This is used for restoring custom tab names with sessions.
-let g:Taboo_tabs = get(g:, "Taboo_tabs", "")
-
-" }}}
-
-" Initialize default settings ------------------- {{{
-
-let g:taboo_tab_format = get(g:, "taboo_tab_format", " %f%m ")
-let g:taboo_renamed_tab_format = get(g:, "taboo_renamed_tab_format", " [%f]%m ")
-let g:taboo_modified_tab_flag= get(g:, "taboo_modified_tab_flag", "*")
-let g:taboo_close_tabs_label = get(g:, "taboo_close_tabs_label", "")
-let g:taboo_unnamed_tab_label = get(g:, "taboo_unnamed_tab_label", "[no name]")
-let g:taboo_open_empty_tab = get(g:, "taboo_open_empty_tab", 1)
-
-" }}}
-
-
-" CONSTRUCT THE TABLINE
+" Settings
 " =============================================================================
 
-" TabooTabline ---------------------------------- {{{
-" This function construct the tabline string for terminal vim
-" The whole tabline is constructed at once.
-function! TabooTabline()
+" This variable is needed to remember custom tab names when a session is
+" saved. String format: 'TABNUM\tTABNAME\nTABNUM\tTABNAME\n...'
+let g:Taboo_tabs =
+    \ get(g:, "Taboo_tabs", "")
 
-    let tabln = ''  " tabline string
+let g:taboo_tabline =
+    \ get(g:, "taboo_tabline", 1)
 
+let g:taboo_tab_format =
+    \ get(g:, "taboo_tab_format", " %f%m ")
+
+let g:taboo_renamed_tab_format =
+    \ get(g:, "taboo_renamed_tab_format", " [%l]%m ")
+
+let g:taboo_modified_tab_flag =
+    \ get(g:, "taboo_modified_tab_flag", "*")
+
+let g:taboo_close_tabs_label =
+    \ get(g:, "taboo_close_tabs_label", "")
+
+let g:taboo_unnamed_tab_label =
+    \ get(g:, "taboo_unnamed_tab_label", "[no name]")
+
+" Functions
+" =============================================================================
+
+" To construct the tabline string for terminal vim.
+fu TabooTabline()
+    let tabline = ''
     for i in s:tabs()
-
-        let label = gettabvar(i, "taboo_tab_name")
-        if empty(label)
-            " not renamed tab
-            let label_items = s:parse_fmt_str(g:taboo_tab_format)
-        else
-            " renamed tab
-            let label_items = s:parse_fmt_str(g:taboo_renamed_tab_format)
-        endif
-
-        let tabln .= i == tabpagenr() ? '%#TabLineSel#' : '%#TabLine#'
-        let tabln .= s:expand_fmt_str(i, label_items)
-
+        let tabline .= i == tabpagenr() ? '%#TabLineSel#' : '%#TabLine#'
+        let title = s:gettabvar(i, "taboo_tab_name")
+        let fmt = empty(title) ? g:taboo_tab_format : g:taboo_renamed_tab_format
+        let tabline .= s:expand(i, fmt)
     endfor
+    let tabline .= '%#TabLineFill#'
+    let tabline .= '%=%#TabLine#%999X' . g:taboo_close_tabs_label
+    return tabline
+endfu
 
-    let tabln .= '%#TabLineFill#'
-    let tabln .= '%=%#TabLine#%999X' . g:taboo_close_tabs_label
+" To construct a single tab title for gui vim.
+fu TabooGuiTabTitle()
+    return TabooTabTitle()
+endfu
 
-    return tabln
+" To rename the current tab.
+fu s:RenameTab(label)
+    cal s:settabvar(tabpagenr(), "taboo_tab_name", a:label)
+    cal s:refresh_tabline()
+endfu
 
-endfunction
-" }}}
+" To open a new tab with a custom name.
+fu s:OpenNewTab(label)
+    tabe!
+    cal s:RenameTab(a:label)
+endfu
 
-" TabooGuiLabel --------------------------------- {{{
-" This function construct a single tab label for gui vim
-" This is automatically called by Vim for each tab.
-function! TabooGuiLabel()
+" If the tab has been renamed the custom name is removed.
+fu s:ResetTabName()
+    cal s:settabvar(tabpagenr(), "taboo_tab_name", "")
+    cal s:refresh_tabline()
+endfu
 
-    let label = gettabvar(v:lnum, "taboo_tab_name")
-    if empty(label)
-        " not renamed tab
-        let label_items = s:parse_fmt_str(g:taboo_tab_format)
-    else
-        " renamed tab
-        let label_items = s:parse_fmt_str(g:taboo_renamed_tab_format)
-    endif
+" Global functions
+" =============================================================================
 
-    return s:expand_fmt_str(v:lnum, label_items)
+" To return the formatted tab title
+fu TabooTabTitle(tabnr)
+    let title = s:gettabvar(i, "taboo_tab_name")
+    let fmt = empty(title) ? g:taboo_tab_format : g:taboo_renamed_tab_format
+    return s:expand(i, fmt)
+endfu
 
-endfunction
-" }}}
+" To return the name of the current tab, if one has been set
+fu TabooTabName(tabnr)
+    return s:tabname(tabnr)
+endfu
 
-" parse_fmt_str --------------------------------- {{{
-" To parse the format string and return a list of tokens, where a token is
-" a single character or a flag such as %f or %2a
-" Example:
-"   parse_fmt_str("%n %tab") -> ['%n', ' ', '%', 't', 'a', 'b']
-function! s:parse_fmt_str(str)
+" Functions for formatting the tab title
+" =============================================================================
 
-    let tokens = []
-    let i = 0
+fu s:expand(tabnr, fmt)
+    let out = a:fmt
+    let out = substitute(out, '\C%f', s:bufname(a:tabnr), "")
+    let out = substitute(out, '\C%a', s:bufpath(a:tabnr), "")
+    let out = substitute(out, '\C%n', s:tabnum(a:tabnr, 0), "")
+    let out = substitute(out, '\C%N', s:tabnum(a:tabnr, 1), "")
+    let out = substitute(out, '\C%w', s:wincount(a:tabnr, 0), "")
+    let out = substitute(out, '\C%W', s:wincount(a:tabnr, 1), "")
+    let out = substitute(out, '\C%m', s:modflag(a:tabnr), "")
+    let out = substitute(out, '\C%l', s:tabname(a:tabnr), "")
+    return out
+endfu
 
-    while i < strlen(a:str)
-        let pos = match(a:str, s:fmt_char . '\(f\|F\|\d\?a\|n\|N\|m\|w\)', i)
-        if pos < 0
-            call extend(tokens, split(strpart(a:str, i, strlen(a:str) - i), '\zs'))
-            let i = strlen(a:str)
-        else
-            call extend(tokens, split(strpart(a:str, i, pos - i), '\zs'))
-            " determne if a number is given as second character
-            let flag_len = match(a:str[pos + 1], "[0-9]") >= 0 ? 3 : 2
-            if flag_len == 2
-                call add(tokens, a:str[pos] . a:str[pos + 1])
-                let i = pos + 2
-            else
-                call add(tokens, a:str[pos] . a:str[pos + 1] . a:str[pos + 2])
-                let i = pos + 3
-            endif
-        endif
-    endwhile
+fu s:tabname(tabnr)
+    return s:gettabvar(a:tabnr, "taboo_tab_name")
+endfu
 
-    return tokens
-
-endfunction
-" }}}
-
-" expand_fmt_str -------------------------------- {{{
-" To expand flags contained in the `items` list of tokes into their respective
-" meanings.
-function! s:expand_fmt_str(tabnr, items)
-
-    let buflist = tabpagebuflist(a:tabnr)
-    let winnr = tabpagewinnr(a:tabnr)
-    let last_active_buf = buflist[winnr - 1]
-    let label = ""
-
-    " specific highlighting for the current tab
-    for i in a:items
-
-        if i[0] == s:fmt_char
-            let f = strpart(i, 1) " remove fmt_char from the string
-            if f ==# "m"
-                let label .= s:expand_modified_flag(buflist)
-            elseif f == "f" || f ==# "a" || match(f, "[0-9]a") == 0
-                let label .= s:expand_path(f, a:tabnr, last_active_buf)
-            elseif f == "n" " note: == performs case insensitive comparison
-                let label .= s:expand_tab_number(f, a:tabnr)
-            elseif f ==# "w"
-                let label .= tabpagewinnr(a:tabnr, '$')
-            endif
-        else
-            let label .= i
-        endif
-
-    endfor
-
-    return label
-
-endfunction
-" }}}
-
-" expand_tab_number ----------------------------- {{{
-function! s:expand_tab_number(flag, tabnr)
-    if a:flag ==# "n" " ==# : case sensitive comparison
-        return a:tabnr == tabpagenr() ? a:tabnr : ''
-    else
+fu s:tabnum(tabnr, ubiquitous)
+    if a:ubiquitous
         return a:tabnr
     endif
-endfunction
-" }}}
+    return a:tabnr == tabpagenr() ? a:tabnr : ''
+endfu
 
-" expand_modified_flag -------------------------- {{{
-function! s:expand_modified_flag(buflist)
-    for b in a:buflist
-        if getbufvar(b, "&mod")
+fu s:wincount(tabnr, ubiquitous)
+    let windows = tabpagewinnr(a:tabnr, '$')
+    if a:ubiquitous
+        return windows
+    endif
+    return a:tabnr == tabpagenr() ? windows : ''
+endfu
+
+fu s:modflag(tabnr)
+    for buf in tabpagebuflist(a:tabnr)
+        if getbufvar(buf, "&mod")
             return g:taboo_modified_tab_flag
         endif
     endfor
-    return ''
-endfunction
-" }}}
+    return ""
+endfu
 
-" expand_path ----------------------------------- {{{
-function! s:expand_path(flag, tabnr, last_active_buf)
-
-    let bn = bufname(a:last_active_buf)
-    let fname = fnamemodify(bn, ':p:t')
-    let basedir = fnamemodify(bn, ':p:h')
-    let label = gettabvar(a:tabnr, 'taboo_tab_name')
-
-    if empty(label)
-        " not renamed tab
-        if empty(fname)
-            " unnamed buffer, usually an empty brand new buffer
-            let path = g:taboo_unnamed_tab_label
-        else
-            let path = ""
-            if a:flag ==# "f"
-                " just the file name
-                let path = fname
-            elseif a:flag ==# "F"
-                " path relative to $HOME (if possible)
-                let path = substitute(basedir, $HOME, '~', '')
-                let path = path . fname
-            elseif a:flag ==# "a"
-                " absolute path
-                let path = basedir . "/" . fname
-            elseif match(a:flag, "[0-9]a") == 0
-                " custom level of path depth
-                let path = substitute(basedir, $HOME, '~', '')
-                let path_tokens = split(path, "/")
-                let _path = []
-                let n = a:flag[0] > len(path_tokens) ? len(path_tokens) : a:flag[0]
-                for t in reverse(path_tokens)
-                    if n > 0
-                        let _path = insert(_path, t, 0)
-                    endif
-                    let n -= 1
-                endfor
-                let path = join(_path, "/") . "/" . fname
-            endif
-        endif
-    else
-        " renamed tab
-        let path = label
+fu s:bufname(tabnr)
+    let bufnum = tabpagebuflist(a:tabnr)[0]
+    let basename = s:basename(bufname(bufnum))
+    if !empty(basename)
+        return basename
     endif
+    return g:taboo_unnamed_tab_label
+endfu
 
-    return path
+fu s:bufpath(tabnr)
+    let bufnum = tabpagebuflist(a:tabnr)[0]
+    let path = s:fullpath(bufname(bufnum), 1)
+    if !empty(path)
+        return path
+    endif
+    return g:taboo_unnamed_tab_label
+endfu
 
-endfunction
-" }}}
-
-
-" INTERFACE FUNCTIONS
+" Helpers
 " =============================================================================
 
-" rename tab ------------------------------------ {{{
-" To rename the current tab.
-function! s:RenameTab(label)
-    let t:taboo_tab_name = a:label
-    call s:refresh_tabline()
-endfunction
-" }}}
-
-" open new tab ---------------------------------- {{{
-" To open a new tab with a custom name.
-function! s:OpenNewTab(label)
-    exec "tabe! " . (g:taboo_open_empty_tab ? '' : '%')
-    call s:RenameTab(a:label)
-endfunction
-" }}}
-
-" reset tab name -------------------------------- {{{
-" If the tab has been renamed the custom name is removed.
-function! s:ResetTabName()
-    let t:taboo_tab_name = ""
-    call s:refresh_tabline()
-endfunction
-" }}}
-
-
-" HELPER FUNCTIONS
-" =============================================================================
-
-" tabs {{{
-function! s:tabs()
+fu s:tabs()
     return range(1, tabpagenr('$'))
-endfunction
-" }}}
+endfu
 
-" refresh_tabline ------------------------------- {{{
-function! s:refresh_tabline()
+fu s:windows(tabnr)
+    return range(1, tabpagewinnr(a:tabnr, '$'))
+endfu
+
+fu s:basename(bufname)
+    return fnamemodify(a:bufname, ':p:t')
+endfu
+
+fu s:fullpath(bufname, pretty)
+    let path = fnamemodify(a:bufname, ':p')
+    return a:pretty ? substitute(path, $HOME, '~', '') : path
+endfu
+
+" To refresh the tabline.
+" This function also ensures that g:Taboo_tabs stays updated.
+fu s:refresh_tabline()
     if exists("g:SessionLoad")
         return
     endif
     let g:Taboo_tabs = ""
     for i in s:tabs()
-        if !empty(gettabvar(i, "taboo_tab_name"))
-            let g:Taboo_tabs .= i."\t".gettabvar(i, "taboo_tab_name")."\n"
+        if !empty(s:gettabvar(i, "taboo_tab_name"))
+            let g:Taboo_tabs .= i."\t".s:gettabvar(i, "taboo_tab_name")."\n"
         endif
     endfor
-    exec "set showtabline=" . &showtabline
-endfunction!
-" }}}
+    exe "set stal=" . &showtabline
+endfu
 
-" extract_tabs_from_str {{{
-function! s:extract_tabs_from_str(str)
-    let tabs = {}
-    let lines = split(a:str, "\n")
-    for ln in lines
-        let tokens = split(ln, "\t")
-        let tabs[tokens[0]] = tokens[1]
+" To restore tab names after a session has been restored.
+fu s:restore_tabs()
+    for [tabnum, tabname] in s:load_tabs("Taboo_tabs")
+        cal s:settabvar(tabnum, "taboo_tab_name", tabname)
     endfor
-    return tabs
-endfunction
-" }}}
+endfu
 
-" restore_tabs {{{
-function! s:restore_tabs()
-    if !empty(g:Taboo_tabs)
-        let tabs = s:extract_tabs_from_str(get(g:, "Taboo_tabs", ""))
-        for i in s:tabs()
-            call settabvar(i, "taboo_tab_name", get(tabs, i, ""))
+fu s:load_tabs(var)
+    return map(split(get(g:, a:var, ""), "\n"), "split(v:val, '\t')")
+endfu
+
+" Backward compatibility functions
+" =============================================================================
+
+" 7.2: Set the tab variable in each window in the tab.
+fu s:settabvar(tabnr, var, value)
+    if v:version > 702
+        cal settabvar(a:tabnr, a:var, a:value)
+    else
+        for winnr in s:windows(a:tabnr)
+            cal settabwinvar(a:tabnr, winnr, a:var, a:value)
         endfor
     endif
-endfunction
-" }}}
+endfu
 
+" 7.2: Each window in a tab should have the pseudo tab variable requested.
+fu s:gettabvar(tabnr, var)
+    if v:version > 702
+        return gettabvar(a:tabnr, a:var)
+    endif
+    for winnr in s:windows(a:tabnr)
+        let value = gettabwinvar(a:tabnr, winnr, a:var)
+        if !empty(value)
+            return value
+        endif
+    endfor
+    return ""
+endfu
 
-" COMMANDS
+" To make sure all windows in the tab have the 'taboo_tab_name' pseudo tab variable.
+fu s:sync_tab_name()
+    let tabnr = tabpagenr()
+    call s:settabvar(tabnr, 'taboo_tab_name', s:gettabvar(tabnr, 'taboo_tab_name'))
+endfu
+
+" Commands
 " =============================================================================
 
 command! -nargs=1 TabooRename call s:RenameTab(<q-args>)
 command! -nargs=1 TabooOpen call s:OpenNewTab(<q-args>)
 command! -nargs=0 TabooReset call s:ResetTabName()
 
-
-" AUTOCOMMANDS
+" Autocommands
 " =============================================================================
 
 augroup taboo
     au!
-    au SessionLoadPost * call s:restore_tabs()
-    au TabLeave,TabEnter * call s:refresh_tabline()
-    au VimEnter * set tabline=%!TabooTabline()
-    au VimEnter * if has('gui_running')|set guitablabel=%!TabooGuiLabel()|endif
+    if g:taboo_tabline
+        au VimEnter * set tabline=%!TabooTabline()
+        au VimEnter * set guitablabel=%!TabooGuiTabTitle()
+    endif
+    au SessionLoadPost * cal s:restore_tabs()
+    au TabLeave,TabEnter * cal s:refresh_tabline()
+    au WinLeave,WinEnter * if v:version < 703 | cal s:sync_tab_name() | endif
+    au BufCreate,BufLeave,BufEnter * if v:version < 703 | cal s:sync_tab_name() | endif
 augroup END
+
+" =============================================================================
+
+let &cpo = s:save_cpo
+unlet s:save_cpo
